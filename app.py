@@ -1,5 +1,5 @@
-# Sovereign AI Compliance Backend - Enhanced Demo Version
-# Multi-Framework Support + Original Functionality
+# Sovereign AI Compliance Backend - Complete Enhanced Version
+# Multi-Framework Support + Enhanced PDF Export + Working Features
 
 import os
 import json
@@ -51,7 +51,7 @@ analysis_storage = {}
 document_storage = {}
 
 class EnhancedComplianceAnalyzer:
-    """Enhanced analyzer with multi-framework support"""
+    """Enhanced analyzer with multi-framework support and fixed PDF export"""
     
     def __init__(self):
         self.api_key = CLAUDE_API_KEY
@@ -352,14 +352,15 @@ analyzer = EnhancedComplianceAnalyzer()
 def home():
     """Enhanced health check endpoint"""
     return jsonify({
-        "service": "Sovereign AI Compliance Backend - Enhanced Demo",
+        "service": "Sovereign AI Compliance Backend - Complete Enhanced Version",
         "status": "running",
-        "version": "2.0",
+        "version": "3.0",
         "platform": "Railway",
         "features": {
             "multi_framework": "GDPR + HIPAA + SOX + PCI-DSS + CCPA",
             "ai_categories": "Healthcare, Financial, Autonomous, HR, Content Moderation, Predictive Analytics",
-            "analysis_types": ["Quick GDPR", "Multi-Framework Comprehensive"]
+            "analysis_types": ["Quick GDPR", "Multi-Framework Comprehensive"],
+            "export_formats": ["PDF", "CSV", "JSON", "Executive Summary"]
         },
         "timestamp": datetime.now().isoformat(),
         "endpoints": [
@@ -568,22 +569,161 @@ def export_detailed(analysis_id):
 
 @app.route('/api/export/pdf/<analysis_id>')
 def export_pdf(analysis_id):
-    """Export analysis as PDF (simplified for demo)"""
+    """Export analysis results as PDF with enhanced formatting"""
     try:
         if analysis_id not in analysis_storage:
             return jsonify({"error": "Analysis not found"}), 404
         
-        # For demo, return JSON instead of actual PDF
-        return jsonify({
-            "success": True,
-            "message": "PDF export functionality available",
-            "analysis_id": analysis_id,
-            "note": "In production, this would generate and return a PDF file"
-        })
+        analysis = analysis_storage[analysis_id]
+        
+        # Create PDF
+        pdf_filename = f"sovereign_compliance_report_{analysis_id[:8]}.pdf"
+        pdf_path = os.path.join(app.config['EXPORT_FOLDER'], pdf_filename)
+        
+        # Generate enhanced PDF content
+        doc = SimpleDocTemplate(pdf_path, pagesize=A4, topMargin=1*inch)
+        styles = getSampleStyleSheet()
+        story = []
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=28,
+            spaceAfter=30,
+            alignment=1,  # Center alignment
+            textColor=colors.darkblue
+        )
+        
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=16,
+            spaceAfter=20,
+            textColor=colors.darkblue,
+            borderWidth=1,
+            borderColor=colors.lightgrey,
+            borderPadding=10,
+            backColor=colors.lightgrey
+        )
+        
+        # Title
+        story.append(Paragraph("🛡️ Sovereign AI Compliance Report", title_style))
+        story.append(Spacer(1, 20))
+        
+        # Executive Summary Box
+        exec_summary_data = [
+            ['Report Details', ''],
+            ['Analysis ID', analysis_id[:8]],
+            ['Generated', datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+            ['Frameworks Analyzed', ', '.join(analysis.get('frameworks_analyzed', ['GDPR']))],
+            ['Overall Risk Score', f"{analysis.get('overall_compliance_score', analysis.get('risk_score', 0))}/100"],
+            ['Risk Level', analysis.get('risk_level', 'MEDIUM')]
+        ]
+        
+        exec_table = Table(exec_summary_data, colWidths=[2.5*inch, 3*inch])
+        exec_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+        ]))
+        story.append(exec_table)
+        story.append(Spacer(1, 30))
+        
+        # Executive Summary Text
+        story.append(Paragraph("Executive Summary", heading_style))
+        exec_text = analysis.get('executive_summary', 'Comprehensive AI compliance analysis completed.')
+        story.append(Paragraph(exec_text, styles['Normal']))
+        story.append(Spacer(1, 20))
+        
+        # Framework Compliance Matrix
+        if analysis.get('framework_scores'):
+            story.append(Paragraph("Compliance Framework Matrix", heading_style))
+            
+            matrix_data = [['Framework', 'Score', 'Status', 'Key Requirements']]
+            for framework, data in analysis.get('framework_scores', {}).items():
+                framework_info = {
+                    'GDPR': 'Data protection, consent, transparency',
+                    'HIPAA': 'Healthcare data security, PHI protection',
+                    'SOX': 'Financial controls, audit trails',
+                    'PCI_DSS': 'Payment card security, encryption',
+                    'CCPA': 'Consumer privacy rights, data transparency'
+                }.get(framework, 'Compliance requirements')
+                
+                status = data.get('status', 'unknown').replace('-', ' ').title()
+                matrix_data.append([
+                    framework,
+                    f"{data.get('score', 0)}/100",
+                    status,
+                    framework_info
+                ])
+            
+            matrix_table = Table(matrix_data, colWidths=[1.5*inch, 1*inch, 1.5*inch, 2.5*inch])
+            matrix_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            story.append(matrix_table)
+            story.append(Spacer(1, 20))
+        
+        # Critical Violations
+        violations = analysis.get('critical_violations', analysis.get('gdpr_violations', []))
+        if violations:
+            story.append(Paragraph("Critical Violations & Recommendations", heading_style))
+            
+            for i, violation in enumerate(violations[:5], 1):  # Limit to top 5
+                story.append(Paragraph(f"<b>Violation {i}: {violation.get('title', violation.get('article', 'Unknown'))}</b>", styles['Normal']))
+                story.append(Paragraph(f"<i>Severity: {violation.get('severity', 'Unknown')}</i>", styles['Normal']))
+                story.append(Paragraph(violation.get('description', 'No description available'), styles['Normal']))
+                
+                if violation.get('recommendation'):
+                    story.append(Paragraph(f"<b>Recommendation:</b> {violation.get('recommendation')}", styles['Normal']))
+                
+                story.append(Spacer(1, 15))
+        
+        # Implementation Roadmap
+        if analysis.get('implementation_roadmap'):
+            story.append(Paragraph("Implementation Roadmap", heading_style))
+            
+            for phase in analysis.get('implementation_roadmap', []):
+                story.append(Paragraph(f"<b>{phase.get('phase', 'Phase')}</b> ({phase.get('duration', 'TBD')})", styles['Normal']))
+                actions = phase.get('actions', [])
+                if actions:
+                    for action in actions:
+                        story.append(Paragraph(f"• {action}", styles['Normal']))
+                story.append(Spacer(1, 10))
+        
+        # Footer
+        story.append(Spacer(1, 30))
+        story.append(Paragraph("Generated by Sovereign AI Compliance Platform", styles['Normal']))
+        story.append(Paragraph(f"Report Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}", styles['Normal']))
+        
+        # Build PDF
+        doc.build(story)
+        
+        return send_file(
+            pdf_path,
+            as_attachment=True,
+            download_name=pdf_filename,
+            mimetype='application/pdf'
+        )
         
     except Exception as e:
         logger.error(f"PDF export error: {str(e)}")
-        return jsonify({"error": f"Export failed: {str(e)}"}), 500
+        return jsonify({"error": f"PDF export failed: {str(e)}"}), 500
 
 @app.errorhandler(404)
 def not_found(error):
@@ -594,10 +734,11 @@ def internal_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == '__main__':
-    logger.info("🚀 Starting Sovereign AI Compliance Backend - Enhanced Demo")
+    logger.info("🚀 Starting Sovereign AI Compliance Backend - Complete Enhanced Version")
     logger.info("🎯 Multi-Framework Support: GDPR + HIPAA + SOX + PCI-DSS + CCPA")
     logger.info("🤖 AI Categories: Healthcare, Financial, Autonomous, HR, Content Moderation")
     logger.info("📊 Analysis Types: Quick GDPR + Multi-Framework Comprehensive")
+    logger.info("📄 Export Formats: PDF + CSV + JSON + Executive Summary")
     logger.info("📄 Enhanced API endpoints available")
     
     port = int(os.environ.get('PORT', 5000))
