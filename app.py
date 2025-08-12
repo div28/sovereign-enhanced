@@ -120,24 +120,80 @@ class ComplianceAnalyzer:
             return ""
 
     def analyze_compliance(self, ai_type, ai_description, policy_text=""):
+        """Perform REAL compliance analysis based on actual content"""
         ai_config = self.ai_types.get(ai_type, self.ai_types["other"])
-        base_score = ai_config["base_risk_score"]
         
-        # Risk factors
-        risk_factors = {
-            "automated decision": 15,
-            "without human review": 20,
-            "facial": 10,
-            "biometric": 15
-        }
+        # Start with base score but make it content-dependent
+        base_score = 30  # Start lower, build up based on actual issues
         
+        policy_lower = policy_text.lower()
         description_lower = ai_description.lower()
-        for factor, points in risk_factors.items():
-            if factor in description_lower:
-                base_score += points
         
-        final_risk_score = min(100, base_score)
-        violations = self._generate_violations(ai_type, ai_description)
+        # REAL POLICY ANALYSIS - Check if policy mentions AI at all
+        ai_mentioned = any(term in policy_lower for term in [
+            'artificial intelligence', 'ai', 'machine learning', 'automated decision', 
+            'algorithm', 'predictive', 'neural network', 'deep learning'
+        ])
+        
+        if not ai_mentioned and len(policy_text) > 100:
+            base_score += 25  # Major gap - policy doesn't mention AI at all
+        
+        # Check for automated decision-making mentions
+        auto_decision_terms = ['automated decision', 'automatic decision', 'algorithmic decision']
+        auto_mentioned = any(term in policy_lower for term in auto_decision_terms)
+        
+        # Check if AI actually makes automated decisions
+        ai_makes_decisions = any(term in description_lower for term in [
+            'automatically', 'automated', 'without human', 'auto reject', 'auto approve'
+        ])
+        
+        if ai_makes_decisions and not auto_mentioned:
+            base_score += 20  # Policy-AI mismatch on automated decisions
+        
+        # Industry-specific risk analysis
+        if ai_type == "hiring":
+            # High-risk indicators for hiring AI
+            hiring_risks = [
+                'facial', 'video interview', 'personality', 'cultural fit', 
+                'scoring', 'ranking', 'reject', 'screening'
+            ]
+            risk_count = sum(1 for risk in hiring_risks if risk in description_lower)
+            base_score += risk_count * 8
+            
+            # Check for GDPR Article 22 mention in policy
+            if 'article 22' not in policy_lower and ai_makes_decisions:
+                base_score += 15
+                
+        elif ai_type == "medical":
+            # Medical AI is inherently high risk
+            base_score += 30
+            medical_terms = ['diagnosis', 'treatment', 'patient', 'medical', 'health']
+            if any(term in description_lower for term in medical_terms):
+                base_score += 20
+                
+        elif ai_type == "finance":
+            # Financial decisions
+            finance_terms = ['credit', 'loan', 'fraud', 'financial', 'payment']
+            if any(term in description_lower for term in finance_terms):
+                base_score += 15
+        
+        # For content/research AI (like The Information example)
+        research_terms = ['research', 'information', 'content', 'article', 'reporting']
+        if any(term in description_lower for term in research_terms) and not ai_makes_decisions:
+            base_score -= 15  # Lower risk for research/content tools
+            
+        # Check for consent mechanisms
+        consent_terms = ['consent', 'opt-in', 'permission', 'agree']
+        if any(term in policy_lower for term in consent_terms):
+            base_score -= 5
+            
+        # Check for human oversight mentions
+        human_terms = ['human review', 'human oversight', 'manual review', 'human intervention']
+        if any(term in policy_lower or term in description_lower for term in human_terms):
+            base_score -= 10
+            
+        final_risk_score = max(10, min(100, base_score))
+        violations = self._generate_smart_violations(ai_type, ai_description, policy_text, policy_lower, description_lower)
         
         analysis_id = f"SOV-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8]}"
         
@@ -151,44 +207,86 @@ class ComplianceAnalyzer:
             "max_penalty": ai_config["max_penalty"],
             "violations": violations,
             "recommendations": self._generate_recommendations(violations),
-            "summary": f"Analysis complete. {len([v for v in violations if v['severity'] == 'CRITICAL'])} critical issues found."
+            "policy_analysis": {
+                "ai_mentioned": ai_mentioned,
+                "automated_decisions_mentioned": auto_mentioned,
+                "policy_ai_gap_detected": ai_makes_decisions and not auto_mentioned,
+                "word_count": len(policy_text.split()) if policy_text else 0
+            },
+            "summary": f"Analysis complete. {len([v for v in violations if v['severity'] == 'CRITICAL'])} critical issues found based on actual policy-AI analysis."
         }
 
-    def _generate_violations(self, ai_type, description):
+    def _generate_smart_violations(self, ai_type, description, policy_text, policy_lower, description_lower):
+        """Generate violations based on ACTUAL policy-AI analysis"""
         violations = []
-        description_lower = description.lower()
         
-        if "automated decision" in description_lower:
+        # Check if AI makes automated decisions but policy doesn't mention it
+        ai_makes_decisions = any(term in description_lower for term in [
+            'automatically', 'automated', 'without human', 'auto reject', 'auto approve'
+        ])
+        
+        auto_mentioned = any(term in policy_lower for term in [
+            'automated decision', 'automatic decision', 'algorithmic decision'
+        ])
+        
+        if ai_makes_decisions and not auto_mentioned and len(policy_text) > 50:
             violations.append({
                 "law": "GDPR Article 22",
-                "title": "Automated individual decision-making",
+                "title": "Automated decision-making not disclosed",
                 "severity": "CRITICAL",
-                "description": "AI makes automated decisions without meaningful human intervention.",
+                "description": f"Your AI system makes automated decisions but your privacy policy doesn't mention automated decision-making rights. AI description mentions: {self._extract_decision_phrases(description_lower)}",
                 "penalty_risk": "€20M or 4% global revenue",
-                "fix": "Implement human review checkpoint for automated decisions"
+                "fix": "Update privacy policy to include GDPR Article 22 automated decision-making disclosures"
             })
         
-        if "facial" in description_lower or "biometric" in description_lower:
-            violations.append({
-                "law": "GDPR Article 9",
-                "title": "Special categories of personal data",
-                "severity": "HIGH", 
-                "description": "Processing biometric data requires explicit consent and safeguards.",
-                "penalty_risk": "€20M or 4% global revenue",
-                "fix": "Implement explicit consent for biometric data processing"
-            })
+        # Check for biometric data processing
+        if any(term in description_lower for term in ['facial', 'biometric', 'voice', 'fingerprint']):
+            biometric_mentioned = any(term in policy_lower for term in ['biometric', 'facial', 'voice'])
+            if not biometric_mentioned:
+                violations.append({
+                    "law": "GDPR Article 9",
+                    "title": "Biometric data processing not disclosed",
+                    "severity": "HIGH",
+                    "description": "AI system processes biometric data but privacy policy lacks proper biometric data disclosures.",
+                    "penalty_risk": "€20M or 4% global revenue",
+                    "fix": "Add explicit biometric data processing section to privacy policy with consent mechanisms"
+                })
         
+        # Industry-specific violations
         if ai_type == "hiring":
+            if 'personality' in description_lower and 'personality' not in policy_lower:
+                violations.append({
+                    "law": "GDPR Article 9",
+                    "title": "Personality assessment data processing",
+                    "severity": "MEDIUM",
+                    "description": "AI processes personality data which may constitute special category data requiring explicit consent.",
+                    "penalty_risk": "€20M or 4% global revenue",
+                    "fix": "Add personality data processing disclosure and obtain explicit consent"
+                })
+        
+        # If no violations found and it's actually low-risk
+        if not violations and any(term in description_lower for term in ['research', 'information', 'content']):
             violations.append({
-                "law": "EEOC Guidelines",
-                "title": "Employment discrimination",
-                "severity": "HIGH",
-                "description": "Automated hiring decisions may violate fair employment practices.",
-                "penalty_risk": "Unlimited compensatory damages",
-                "fix": "Establish bias testing and human review processes"
+                "law": "GDPR Article 13",
+                "title": "Basic transparency requirements",
+                "severity": "LOW",
+                "description": "While your AI system appears low-risk, ensure your privacy policy includes basic data processing information.",
+                "penalty_risk": "€10M or 2% global revenue",
+                "fix": "Review privacy policy for completeness of data processing disclosures"
             })
         
         return violations
+    
+    def _extract_decision_phrases(self, description_lower):
+        """Extract phrases that indicate automated decision-making"""
+        decision_phrases = []
+        if 'automatically' in description_lower:
+            decision_phrases.append('automatically processes/decides')
+        if 'without human' in description_lower:
+            decision_phrases.append('without human review')
+        if 'reject' in description_lower:
+            decision_phrases.append('automatic rejection')
+        return ', '.join(decision_phrases) if decision_phrases else 'automated processing'
 
     def _generate_recommendations(self, violations):
         recommendations = []
@@ -340,23 +438,34 @@ def analyze_compliance():
         ai_system = data.get('ai_system', {})
         ai_description = ai_system.get('description', '')
         ai_type = ai_system.get('type', 'other')
+        policy_text_direct = data.get('policy_text', '')  # Text pasted directly
         
         if not ai_description:
             return jsonify({'success': False, 'error': 'AI description required'}), 400
         
-        # Get document text
-        policy_text = ""
+        # Get policy text from file or direct input
+        policy_text = policy_text_direct
         if document_id and document_id in document_storage:
-            policy_text = document_storage[document_id].get('extracted_text', '')
+            file_policy_text = document_storage[document_id].get('extracted_text', '')
+            # Use file text if available, otherwise use direct text
+            if file_policy_text:
+                policy_text = file_policy_text
         
-        # Analyze
+        # Require either policy text or uploaded document
+        if not policy_text and not document_id:
+            return jsonify({
+                'success': False, 
+                'error': 'Either upload a privacy policy document or provide policy text'
+            }), 400
+        
+        # Analyze with actual policy content
         analysis = analyzer.analyze_compliance(ai_type, ai_description, policy_text)
         analysis_storage[analysis['analysis_id']] = analysis
         
         return jsonify({
             'success': True,
             'analysis': analysis,
-            'message': 'Analysis completed'
+            'message': 'Real compliance analysis completed based on policy-AI cross-reference'
         })
 
     except Exception as e:
