@@ -1,4 +1,4 @@
-# Sovereign AI Compliance Backend - Production Ready
+# Sovereign AI Compliance Backend - Fixed with Validation & Professional PDF
 import os
 import json
 import time
@@ -13,16 +13,20 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import PyPDF2
 from io import BytesIO
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
+from reportlab.lib.units import inch, cm
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+from reportlab.graphics.shapes import Drawing, Rect, String
+from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics import renderPDF
 
 # Initialize Flask app
 app = Flask(__name__)
 
-# CORS Configuration - Fixed for production
+# CORS Configuration
 CORS(app, 
      origins=["*"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -59,55 +63,71 @@ def after_request(response):
 
 class ComplianceAnalyzer:
     def __init__(self):
+        # Industry validation keywords
+        self.industry_keywords = {
+            "hiring": ['hiring', 'recruitment', 'employee', 'candidate', 'job', 'resume', 'interview', 'applicant', 'hr', 'human resources', 'employment', 'workforce', 'talent', 'career'],
+            "medical": ['medical', 'health', 'patient', 'doctor', 'hospital', 'healthcare', 'clinical', 'diagnosis', 'treatment', 'physician', 'medical device', 'pharmaceutical', 'therapy', 'medicine'],
+            "finance": ['financial', 'finance', 'bank', 'credit', 'loan', 'payment', 'trading', 'investment', 'money', 'currency', 'transaction', 'fraud', 'risk', 'insurance'],
+            "content": ['content', 'moderation', 'social media', 'post', 'comment', 'user-generated', 'platform', 'community', 'forum', 'blog', 'publication', 'media']
+        }
+        
         self.ai_types = {
             "hiring": {
                 "name": "Hiring & Recruitment AI",
                 "base_risk_score": 85,
                 "max_penalty": "€20M or 4% global revenue",
-                "laws": [
-                    {"law": "GDPR Article 22", "severity": "CRITICAL"},
-                    {"law": "EEOC Guidelines", "severity": "HIGH"},
-                    {"law": "NYC Local Law 144", "severity": "HIGH"}
-                ]
+                "critical_laws": ["GDPR Article 22", "EEOC Guidelines", "NYC Local Law 144"]
             },
             "medical": {
                 "name": "Medical & Healthcare AI", 
                 "base_risk_score": 95,
                 "max_penalty": "$1.5M per incident",
-                "laws": [
-                    {"law": "HIPAA", "severity": "CRITICAL"},
-                    {"law": "FDA 21 CFR", "severity": "CRITICAL"}
-                ]
+                "critical_laws": ["HIPAA", "FDA 21 CFR", "GDPR Health Data"]
             },
             "finance": {
                 "name": "Financial Services AI",
-                "base_risk_score": 70,
+                "base_risk_score": 75,
                 "max_penalty": "$5M + prosecution",
-                "laws": [
-                    {"law": "SOX", "severity": "CRITICAL"},
-                    {"law": "PCI-DSS", "severity": "HIGH"}
-                ]
+                "critical_laws": ["SOX", "PCI-DSS", "Fair Credit Reporting Act"]
             },
             "content": {
                 "name": "Content Moderation AI",
-                "base_risk_score": 60,
-                "max_penalty": "6% global revenue",
-                "laws": [
-                    {"law": "DSA", "severity": "HIGH"},
-                    {"law": "GDPR", "severity": "HIGH"}
-                ]
-            },
-            "other": {
-                "name": "Custom AI System",
                 "base_risk_score": 65,
-                "max_penalty": "Varies by jurisdiction",
-                "laws": [
-                    {"law": "GDPR", "severity": "HIGH"}
-                ]
+                "max_penalty": "6% global revenue",
+                "critical_laws": ["DSA", "GDPR", "Section 230"]
             }
         }
 
+    def validate_industry_match(self, industry, policy_text, ai_description):
+        """Validate that policy and AI description match the selected industry"""
+        if not industry or industry not in self.industry_keywords:
+            return False, "Invalid industry selection"
+        
+        keywords = self.industry_keywords[industry]
+        policy_lower = policy_text.lower() if policy_text else ""
+        ai_lower = ai_description.lower() if ai_description else ""
+        
+        # Check policy match (need at least 2 keyword matches)
+        policy_matches = sum(1 for keyword in keywords if keyword in policy_lower)
+        
+        # Check AI description match (need at least 1 keyword + AI terms)
+        ai_matches = sum(1 for keyword in keywords if keyword in ai_lower)
+        ai_terms = ['ai', 'artificial intelligence', 'machine learning', 'algorithm', 'automated', 'model']
+        ai_term_matches = sum(1 for term in ai_terms if term in ai_lower)
+        
+        policy_valid = policy_matches >= 2 or len(policy_text) < 100  # Allow short policies
+        ai_valid = ai_matches >= 1 and ai_term_matches >= 1
+        
+        if not policy_valid:
+            return False, f"Policy doesn't appear to be for {industry} industry (found {policy_matches} relevant terms)"
+        
+        if not ai_valid:
+            return False, f"AI description doesn't match {industry} industry or lacks AI terminology"
+        
+        return True, "Industry validation passed"
+
     def extract_text_from_pdf(self, file_path):
+        """Extract text from PDF with error handling"""
         try:
             with open(file_path, 'rb') as file:
                 pdf_reader = PyPDF2.PdfReader(file)
@@ -119,248 +139,391 @@ class ComplianceAnalyzer:
             logger.error(f"PDF extraction error: {str(e)}")
             return ""
 
-    def analyze_compliance(self, ai_type, ai_description, policy_text=""):
-        """Perform REAL compliance analysis based on actual content"""
-        ai_config = self.ai_types.get(ai_type, self.ai_types["other"])
+    def analyze_compliance(self, ai_type, ai_description, policy_text="", regions=None, validation_passed=False):
+        """Perform intelligent compliance analysis with proper validation"""
         
-        # Start with base score but make it content-dependent
-        base_score = 30  # Start lower, build up based on actual issues
+        if not validation_passed:
+            is_valid, validation_message = self.validate_industry_match(ai_type, policy_text, ai_description)
+            if not is_valid:
+                return {
+                    "success": False,
+                    "error": f"Validation failed: {validation_message}",
+                    "validation_required": True
+                }
         
-        policy_lower = policy_text.lower()
-        description_lower = ai_description.lower()
+        ai_config = self.ai_types.get(ai_type, self.ai_types["content"])
+        regions = regions or ["eu"]
         
-        # REAL POLICY ANALYSIS - Check if policy mentions AI at all
-        ai_mentioned = any(term in policy_lower for term in [
-            'artificial intelligence', 'ai', 'machine learning', 'automated decision', 
-            'algorithm', 'predictive', 'neural network', 'deep learning'
-        ])
-        
-        if not ai_mentioned and len(policy_text) > 100:
-            base_score += 25  # Major gap - policy doesn't mention AI at all
-        
-        # Check for automated decision-making mentions
-        auto_decision_terms = ['automated decision', 'automatic decision', 'algorithmic decision']
-        auto_mentioned = any(term in policy_lower for term in auto_decision_terms)
-        
-        # Check if AI actually makes automated decisions
-        ai_makes_decisions = any(term in description_lower for term in [
-            'automatically', 'automated', 'without human', 'auto reject', 'auto approve'
-        ])
-        
-        if ai_makes_decisions and not auto_mentioned:
-            base_score += 20  # Policy-AI mismatch on automated decisions
-        
-        # Industry-specific risk analysis
-        if ai_type == "hiring":
-            # High-risk indicators for hiring AI
-            hiring_risks = [
-                'facial', 'video interview', 'personality', 'cultural fit', 
-                'scoring', 'ranking', 'reject', 'screening'
-            ]
-            risk_count = sum(1 for risk in hiring_risks if risk in description_lower)
-            base_score += risk_count * 8
-            
-            # Check for GDPR Article 22 mention in policy
-            if 'article 22' not in policy_lower and ai_makes_decisions:
-                base_score += 15
-                
-        elif ai_type == "medical":
-            # Medical AI is inherently high risk
-            base_score += 30
-            medical_terms = ['diagnosis', 'treatment', 'patient', 'medical', 'health']
-            if any(term in description_lower for term in medical_terms):
-                base_score += 20
-                
-        elif ai_type == "finance":
-            # Financial decisions
-            finance_terms = ['credit', 'loan', 'fraud', 'financial', 'payment']
-            if any(term in description_lower for term in finance_terms):
-                base_score += 15
-        
-        # For content/research AI (like The Information example)
-        research_terms = ['research', 'information', 'content', 'article', 'reporting']
-        if any(term in description_lower for term in research_terms) and not ai_makes_decisions:
-            base_score -= 15  # Lower risk for research/content tools
-            
-        # Check for consent mechanisms
-        consent_terms = ['consent', 'opt-in', 'permission', 'agree']
-        if any(term in policy_lower for term in consent_terms):
-            base_score -= 5
-            
-        # Check for human oversight mentions
-        human_terms = ['human review', 'human oversight', 'manual review', 'human intervention']
-        if any(term in policy_lower or term in description_lower for term in human_terms):
-            base_score -= 10
-            
-        final_risk_score = max(10, min(100, base_score))
-        violations = self._generate_smart_violations(ai_type, ai_description, policy_text, policy_lower, description_lower)
+        # Smart risk scoring based on actual content
+        risk_score = self._calculate_intelligent_risk_score(ai_type, ai_description, policy_text)
+        violations = self._generate_smart_violations(ai_type, ai_description, policy_text, regions)
+        recommendations = self._generate_recommendations(violations, ai_type)
         
         analysis_id = f"SOV-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8]}"
         
-        return {
+        analysis = {
             "analysis_id": analysis_id,
             "timestamp": datetime.now().isoformat(),
             "ai_type": ai_config["name"],
-            "risk_score": final_risk_score,
-            "risk_level": self._get_risk_level(final_risk_score),
-            "compliance_score": max(0, 100 - final_risk_score),
+            "industry": ai_type,
+            "regions": regions,
+            "risk_score": risk_score,
+            "risk_level": self._get_risk_level(risk_score),
+            "compliance_score": max(0, 100 - risk_score),
             "max_penalty": ai_config["max_penalty"],
             "violations": violations,
-            "recommendations": self._generate_recommendations(violations),
+            "recommendations": recommendations,
             "policy_analysis": {
-                "ai_mentioned": ai_mentioned,
-                "automated_decisions_mentioned": auto_mentioned,
-                "policy_ai_gap_detected": ai_makes_decisions and not auto_mentioned,
-                "word_count": len(policy_text.split()) if policy_text else 0
+                "word_count": len(policy_text.split()) if policy_text else 0,
+                "industry_validated": validation_passed,
+                "key_gaps_identified": len([v for v in violations if v['severity'] == 'CRITICAL'])
             },
-            "summary": f"Analysis complete. {len([v for v in violations if v['severity'] == 'CRITICAL'])} critical issues found based on actual policy-AI analysis."
+            "summary": f"Professional compliance analysis complete. {len([v for v in violations if v['severity'] == 'CRITICAL'])} critical issues identified requiring immediate attention."
         }
+        
+        return analysis
 
-    def _generate_smart_violations(self, ai_type, description, policy_text, policy_lower, description_lower):
-        """Generate violations based on ACTUAL policy-AI analysis"""
+    def _calculate_intelligent_risk_score(self, ai_type, ai_description, policy_text):
+        """Calculate risk score based on actual content analysis"""
+        base_score = 30  # Start conservative
+        
+        ai_lower = ai_description.lower()
+        policy_lower = policy_text.lower() if policy_text else ""
+        
+        # High-risk AI capabilities
+        high_risk_terms = {
+            'automated decision': 15,
+            'without human': 20,
+            'facial recognition': 15,
+            'biometric': 15,
+            'personality': 10,
+            'reject automatically': 20,
+            'auto-reject': 20,
+            'scoring': 10,
+            'ranking': 10
+        }
+        
+        for term, score_increase in high_risk_terms.items():
+            if term in ai_lower:
+                base_score += score_increase
+        
+        # Industry-specific adjustments
+        industry_multipliers = {
+            'hiring': 1.2,
+            'medical': 1.4,
+            'finance': 1.1,
+            'content': 0.9
+        }
+        
+        base_score *= industry_multipliers.get(ai_type, 1.0)
+        
+        # Policy completeness check
+        if len(policy_text) < 500:
+            base_score += 10  # Incomplete policy
+        
+        # Check for compliance mentions
+        compliance_terms = ['gdpr', 'consent', 'data protection', 'privacy rights', 'automated decision']
+        compliance_mentions = sum(1 for term in compliance_terms if term in policy_lower)
+        
+        if compliance_mentions < 2:
+            base_score += 15  # Poor compliance awareness
+        
+        return min(95, max(15, int(base_score)))
+
+    def _generate_smart_violations(self, ai_type, ai_description, policy_text, regions):
+        """Generate realistic violations based on content analysis"""
         violations = []
+        ai_lower = ai_description.lower()
+        policy_lower = policy_text.lower() if policy_text else ""
         
-        # Check if AI makes automated decisions but policy doesn't mention it
-        ai_makes_decisions = any(term in description_lower for term in [
-            'automatically', 'automated', 'without human', 'auto reject', 'auto approve'
-        ])
+        # Universal GDPR violations for EU regions
+        if 'eu' in regions or 'uk' in regions:
+            # Article 22 - Automated decision making
+            if any(term in ai_lower for term in ['automatically', 'auto-reject', 'without human']):
+                if 'article 22' not in policy_lower and 'automated decision' not in policy_lower:
+                    violations.append({
+                        "law": "GDPR Article 22",
+                        "title": "Automated decision-making without proper disclosure",
+                        "severity": "CRITICAL",
+                        "description": "AI system makes automated decisions but privacy policy lacks Article 22 disclosures about individual rights.",
+                        "penalty": "€20M or 4% global revenue",
+                        "fix": "Add GDPR Article 22 section to privacy policy with clear explanation of automated decision-making and individual rights",
+                        "region": "EU/UK"
+                    })
+            
+            # Biometric data processing
+            if any(term in ai_lower for term in ['facial', 'biometric', 'voice recognition']):
+                if not any(term in policy_lower for term in ['biometric', 'facial data', 'special category']):
+                    violations.append({
+                        "law": "GDPR Article 9",
+                        "title": "Biometric data processing without proper legal basis",
+                        "severity": "CRITICAL", 
+                        "description": "AI processes biometric data but policy lacks special category data protections and explicit consent mechanisms.",
+                        "penalty": "€20M or 4% global revenue",
+                        "fix": "Add biometric data processing section with explicit consent requirements and special category data protections",
+                        "region": "EU/UK"
+                    })
         
-        auto_mentioned = any(term in policy_lower for term in [
-            'automated decision', 'automatic decision', 'algorithmic decision'
-        ])
-        
-        if ai_makes_decisions and not auto_mentioned and len(policy_text) > 50:
-            violations.append({
-                "law": "GDPR Article 22",
-                "title": "Automated decision-making not disclosed",
-                "severity": "CRITICAL",
-                "description": f"Your AI system makes automated decisions but your privacy policy doesn't mention automated decision-making rights. AI description mentions: {self._extract_decision_phrases(description_lower)}",
-                "penalty_risk": "€20M or 4% global revenue",
-                "fix": "Update privacy policy to include GDPR Article 22 automated decision-making disclosures"
-            })
-        
-        # Check for biometric data processing
-        if any(term in description_lower for term in ['facial', 'biometric', 'voice', 'fingerprint']):
-            biometric_mentioned = any(term in policy_lower for term in ['biometric', 'facial', 'voice'])
-            if not biometric_mentioned:
+        # US-specific violations
+        if 'us' in regions:
+            if ai_type == 'hiring':
                 violations.append({
-                    "law": "GDPR Article 9",
-                    "title": "Biometric data processing not disclosed",
+                    "law": "EEOC Guidelines",
+                    "title": "Potential employment discrimination risk",
                     "severity": "HIGH",
-                    "description": "AI system processes biometric data but privacy policy lacks proper biometric data disclosures.",
-                    "penalty_risk": "€20M or 4% global revenue",
-                    "fix": "Add explicit biometric data processing section to privacy policy with consent mechanisms"
+                    "description": "Hiring AI may have disparate impact on protected classes without proper bias testing and validation.",
+                    "penalty": "Unlimited compensatory damages",
+                    "fix": "Implement bias testing, adverse impact analysis, and regular fairness audits",
+                    "region": "US"
                 })
         
         # Industry-specific violations
-        if ai_type == "hiring":
-            if 'personality' in description_lower and 'personality' not in policy_lower:
-                violations.append({
-                    "law": "GDPR Article 9",
-                    "title": "Personality assessment data processing",
-                    "severity": "MEDIUM",
-                    "description": "AI processes personality data which may constitute special category data requiring explicit consent.",
-                    "penalty_risk": "€20M or 4% global revenue",
-                    "fix": "Add personality data processing disclosure and obtain explicit consent"
-                })
+        if ai_type == 'medical' and any(region in regions for region in ['us']):
+            violations.append({
+                "law": "HIPAA",
+                "title": "Protected Health Information processing gaps",
+                "severity": "CRITICAL",
+                "description": "Medical AI processes PHI but may lack proper safeguards and patient consent mechanisms.",
+                "penalty": "$1.5M per incident",
+                "fix": "Implement HIPAA-compliant data handling with proper Business Associate Agreements and encryption",
+                "region": "US"
+            })
         
-        # If no violations found and it's actually low-risk
-        if not violations and any(term in description_lower for term in ['research', 'information', 'content']):
+        # If no major violations found, add basic compliance gaps
+        if len(violations) == 0:
             violations.append({
                 "law": "GDPR Article 13",
                 "title": "Basic transparency requirements",
-                "severity": "LOW",
-                "description": "While your AI system appears low-risk, ensure your privacy policy includes basic data processing information.",
-                "penalty_risk": "€10M or 2% global revenue",
-                "fix": "Review privacy policy for completeness of data processing disclosures"
+                "severity": "MEDIUM",
+                "description": "Privacy policy could be more comprehensive regarding AI data processing activities.",
+                "penalty": "€10M or 2% global revenue", 
+                "fix": "Enhance privacy policy with detailed AI processing descriptions and data subject rights",
+                "region": "EU"
             })
         
         return violations
-    
-    def _extract_decision_phrases(self, description_lower):
-        """Extract phrases that indicate automated decision-making"""
-        decision_phrases = []
-        if 'automatically' in description_lower:
-            decision_phrases.append('automatically processes/decides')
-        if 'without human' in description_lower:
-            decision_phrases.append('without human review')
-        if 'reject' in description_lower:
-            decision_phrases.append('automatic rejection')
-        return ', '.join(decision_phrases) if decision_phrases else 'automated processing'
 
-    def _generate_recommendations(self, violations):
+    def _generate_recommendations(self, violations, ai_type):
+        """Generate actionable recommendations based on violations"""
         recommendations = []
         
         critical_count = len([v for v in violations if v['severity'] == 'CRITICAL'])
+        
         if critical_count > 0:
             recommendations.append({
                 "priority": "CRITICAL",
                 "timeline": "1-2 weeks",
-                "action": "Address critical compliance violations immediately",
-                "impact": "Prevents €20M+ fines"
+                "action": f"Address {critical_count} critical compliance violations immediately",
+                "impact": "Prevents €20M+ regulatory fines",
+                "steps": [
+                    "Update privacy policy with missing disclosures",
+                    "Implement human review checkpoints",
+                    "Add consent mechanisms for sensitive data"
+                ]
             })
         
         recommendations.append({
-            "priority": "HIGH", 
-            "timeline": "1 month",
-            "action": "Implement bias testing and fairness controls",
-            "impact": "Reduces discrimination liability"
+            "priority": "HIGH",
+            "timeline": "1 month", 
+            "action": "Implement comprehensive AI governance framework",
+            "impact": "Reduces long-term compliance risk by 75%",
+            "steps": [
+                "Establish AI ethics committee",
+                "Create bias testing protocols",
+                "Implement regular compliance audits"
+            ]
         })
         
         return recommendations
 
     def _get_risk_level(self, score):
+        """Convert numeric score to risk level"""
         if score >= 80:
             return "CRITICAL RISK"
         elif score >= 65:
-            return "HIGH RISK"
+            return "HIGH RISK" 
         elif score >= 45:
             return "MEDIUM RISK"
         else:
             return "LOW RISK"
 
-    def generate_pdf_report(self, analysis):
-        filename = f"sovereign_report_{analysis['analysis_id']}.pdf"
+    def generate_professional_pdf(self, analysis):
+        """Generate a comprehensive, professional PDF report"""
+        filename = f"sovereign_compliance_report_{analysis['analysis_id']}.pdf"
         filepath = os.path.join(app.config['EXPORT_FOLDER'], filename)
         
-        doc = SimpleDocTemplate(filepath, pagesize=letter)
+        # Create document
+        doc = SimpleDocTemplate(
+            filepath, 
+            pagesize=A4,
+            rightMargin=2*cm,
+            leftMargin=2*cm,
+            topMargin=2*cm,
+            bottomMargin=2*cm
+        )
+        
+        # Styles
         styles = getSampleStyleSheet()
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#1e40af'),
+            spaceAfter=30,
+            alignment=TA_CENTER,
+            fontName='Helvetica-Bold'
+        )
+        
+        subtitle_style = ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#374151'),
+            spaceAfter=20,
+            fontName='Helvetica-Bold'
+        )
+        
+        body_style = ParagraphStyle(
+            'CustomBody',
+            parent=styles['Normal'],
+            fontSize=11,
+            textColor=colors.HexColor('#1f2937'),
+            spaceAfter=12,
+            alignment=TA_JUSTIFY,
+            fontName='Helvetica'
+        )
+        
+        # Build story
         story = []
         
-        # Title
-        title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=24, textColor=colors.HexColor('#1e40af'))
-        story.append(Paragraph("🛡️ Sovereign AI Compliance Report", title_style))
-        story.append(Spacer(1, 20))
+        # Title Page
+        story.append(Paragraph("🛡️ SOVEREIGN", title_style))
+        story.append(Paragraph("AI Compliance Intelligence Report", subtitle_style))
+        story.append(Spacer(1, 30))
         
-        # Summary table
+        # Executive Summary Box
         summary_data = [
-            ["Analysis ID:", analysis['analysis_id']],
-            ["AI System:", analysis['ai_type']], 
-            ["Risk Score:", f"{analysis['risk_score']}/100"],
-            ["Risk Level:", analysis['risk_level']],
-            ["Critical Issues:", str(len([v for v in analysis['violations'] if v['severity'] == 'CRITICAL']))]
+            ["Report ID:", analysis['analysis_id']],
+            ["Generated:", datetime.now().strftime("%B %d, %Y at %I:%M %p")],
+            ["AI System Type:", analysis['ai_type']],
+            ["Operating Regions:", ", ".join(analysis.get('regions', ['EU']))],
+            ["Risk Score:", f"{analysis['risk_score']}/100 ({analysis['risk_level']})"],
+            ["Compliance Score:", f"{analysis['compliance_score']}/100"],
+            ["Critical Issues:", str(len([v for v in analysis['violations'] if v['severity'] == 'CRITICAL']))],
+            ["Total Violations:", str(len(analysis['violations']))]
         ]
         
-        summary_table = Table(summary_data, colWidths=[2*inch, 4*inch])
+        summary_table = Table(summary_data, colWidths=[4*cm, 8*cm])
         summary_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f1f5f9')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0'))
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f8fafc')),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#1e40af')),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
         ]))
         
         story.append(summary_table)
         story.append(Spacer(1, 30))
         
-        # Violations
-        story.append(Paragraph("Compliance Violations", styles['Heading2']))
+        # Risk Assessment
+        story.append(Paragraph("📊 Risk Assessment", subtitle_style))
+        
+        risk_color = colors.red if analysis['risk_score'] >= 70 else colors.orange if analysis['risk_score'] >= 50 else colors.green
+        
+        story.append(Paragraph(f"""
+        <b>Overall Risk Level:</b> {analysis['risk_level']}<br/>
+        <b>Risk Score:</b> {analysis['risk_score']}/100<br/>
+        <b>Compliance Score:</b> {analysis['compliance_score']}/100<br/><br/>
+        
+        This assessment is based on analysis of your AI system description and privacy policy 
+        against applicable regulatory frameworks in {', '.join(analysis.get('regions', ['EU']))}. 
+        The risk score considers automated decision-making capabilities, data processing practices, 
+        and policy completeness.
+        """, body_style))
+        
+        story.append(Spacer(1, 20))
+        
+        # Violations Section
+        story.append(Paragraph("⚠️ Compliance Violations", subtitle_style))
+        
         for i, violation in enumerate(analysis['violations'], 1):
-            story.append(Paragraph(f"{i}. {violation['title']}", styles['Heading3']))
-            story.append(Paragraph(f"Law: {violation['law']}", styles['Normal']))
-            story.append(Paragraph(f"Severity: {violation['severity']}", styles['Normal']))
-            story.append(Paragraph(f"Fix: {violation['fix']}", styles['Normal']))
+            severity_color = colors.red if violation['severity'] == 'CRITICAL' else colors.orange if violation['severity'] == 'HIGH' else colors.blue
+            
+            violation_data = [
+                [f"Violation #{i}", ""],
+                ["Law/Regulation:", violation['law']],
+                ["Title:", violation['title']],
+                ["Severity:", violation['severity']],
+                ["Description:", violation['description']],
+                ["Max Penalty:", violation['penalty']],
+                ["Recommended Fix:", violation['fix']],
+                ["Jurisdiction:", violation.get('region', 'Global')]
+            ]
+            
+            violation_table = Table(violation_data, colWidths=[3*cm, 9*cm])
+            violation_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), severity_color),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ]))
+            
+            story.append(violation_table)
             story.append(Spacer(1, 15))
         
+        # Recommendations Section
+        story.append(PageBreak())
+        story.append(Paragraph("🎯 Implementation Roadmap", subtitle_style))
+        
+        for rec in analysis['recommendations']:
+            priority_color = colors.red if rec['priority'] == 'CRITICAL' else colors.orange
+            
+            story.append(Paragraph(f"<b>{rec['priority']} PRIORITY</b> ({rec['timeline']})", 
+                                  ParagraphStyle('Priority', 
+                                               parent=body_style, 
+                                               textColor=priority_color,
+                                               fontName='Helvetica-Bold')))
+            
+            story.append(Paragraph(f"<b>Action:</b> {rec['action']}", body_style))
+            story.append(Paragraph(f"<b>Impact:</b> {rec['impact']}", body_style))
+            
+            if 'steps' in rec:
+                story.append(Paragraph("<b>Implementation Steps:</b>", body_style))
+                for step in rec['steps']:
+                    story.append(Paragraph(f"• {step}", body_style))
+            
+            story.append(Spacer(1, 15))
+        
+        # Footer
+        story.append(PageBreak())
+        story.append(Paragraph("About Sovereign AI Compliance", subtitle_style))
+        story.append(Paragraph("""
+        This report was generated by Sovereign AI Compliance Intelligence platform, 
+        providing automated regulatory analysis for enterprise AI systems. 
+        
+        <b>Disclaimer:</b> This analysis is for informational purposes and does not constitute legal advice. 
+        Consult qualified legal counsel for specific compliance guidance.
+        
+        <b>Contact:</b> For questions about this report or enterprise solutions, 
+        contact: compliance@sovereign.ai
+        """, body_style))
+        
+        # Build PDF
         doc.build(story)
         return filepath
 
@@ -372,8 +535,9 @@ analyzer = ComplianceAnalyzer()
 def home():
     return jsonify({
         "status": "online",
-        "service": "Sovereign AI Compliance API",
-        "version": "2.0.0",
+        "service": "Sovereign AI Compliance API - Enhanced",
+        "version": "3.0.0",
+        "features": ["industry_validation", "smart_analysis", "professional_pdf"],
         "timestamp": datetime.now().isoformat()
     })
 
@@ -404,7 +568,7 @@ def upload_document():
             with open(filepath, 'r', encoding='utf-8') as f:
                 extracted_text = f.read()
         else:
-            extracted_text = f"File uploaded. {file_ext} processing available."
+            extracted_text = f"File uploaded successfully. {file_ext} processing available."
         
         # Store document
         document_id = f"doc_{timestamp}_{str(uuid.uuid4())[:8]}"
@@ -412,7 +576,8 @@ def upload_document():
             'filename': filename,
             'filepath': filepath,
             'extracted_text': extracted_text,
-            'upload_time': datetime.now().isoformat()
+            'upload_time': datetime.now().isoformat(),
+            'word_count': len(extracted_text.split()) if extracted_text else 0
         }
         
         return jsonify({
@@ -420,6 +585,7 @@ def upload_document():
             'document_id': document_id,
             'filename': filename,
             'text_preview': extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text,
+            'word_count': len(extracted_text.split()) if extracted_text else 0,
             'message': 'Document processed successfully'
         })
 
@@ -437,35 +603,46 @@ def analyze_compliance():
         document_id = data.get('document_id')
         ai_system = data.get('ai_system', {})
         ai_description = ai_system.get('description', '')
-        ai_type = ai_system.get('type', 'other')
-        policy_text_direct = data.get('policy_text', '')  # Text pasted directly
+        ai_type = ai_system.get('type', 'hiring')
+        regions = ai_system.get('regions', ['eu'])
+        policy_text_direct = data.get('policy_text', '')
+        validation_info = data.get('validation', {})
         
         if not ai_description:
-            return jsonify({'success': False, 'error': 'AI description required'}), 400
+            return jsonify({'success': False, 'error': 'AI system description is required'}), 400
         
         # Get policy text from file or direct input
         policy_text = policy_text_direct
         if document_id and document_id in document_storage:
             file_policy_text = document_storage[document_id].get('extracted_text', '')
-            # Use file text if available, otherwise use direct text
             if file_policy_text:
                 policy_text = file_policy_text
         
-        # Require either policy text or uploaded document
-        if not policy_text and not document_id:
+        if not policy_text:
             return jsonify({
                 'success': False, 
-                'error': 'Either upload a privacy policy document or provide policy text'
+                'error': 'Privacy policy is required (either upload document or provide text)'
             }), 400
         
-        # Analyze with actual policy content
-        analysis = analyzer.analyze_compliance(ai_type, ai_description, policy_text)
+        # Perform analysis with validation
+        analysis = analyzer.analyze_compliance(
+            ai_type=ai_type,
+            ai_description=ai_description, 
+            policy_text=policy_text,
+            regions=regions,
+            validation_passed=validation_info.get('industry_validated', False)
+        )
+        
+        if not analysis.get('success', True):
+            return jsonify(analysis), 400
+        
+        # Store analysis for PDF generation
         analysis_storage[analysis['analysis_id']] = analysis
         
         return jsonify({
             'success': True,
             'analysis': analysis,
-            'message': 'Real compliance analysis completed based on policy-AI cross-reference'
+            'message': 'Intelligent compliance analysis completed with industry validation'
         })
 
     except Exception as e:
@@ -479,17 +656,17 @@ def export_pdf(analysis_id):
             return jsonify({'error': 'Analysis not found'}), 404
         
         analysis = analysis_storage[analysis_id]
-        pdf_path = analyzer.generate_pdf_report(analysis)
+        pdf_path = analyzer.generate_professional_pdf(analysis)
         
         return send_file(
             pdf_path,
             as_attachment=True,
-            download_name=f"sovereign_report_{analysis_id[:8]}.pdf",
+            download_name=f"sovereign_compliance_report_{analysis_id[:8]}.pdf",
             mimetype='application/pdf'
         )
     except Exception as e:
-        logger.error(f"PDF error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"PDF generation error: {str(e)}")
+        return jsonify({'error': f'PDF generation failed: {str(e)}'}), 500
 
 @app.route('/api/health')
 def health_check():
@@ -499,7 +676,8 @@ def health_check():
         "storage": {
             "documents": len(document_storage),
             "analyses": len(analysis_storage)
-        }
+        },
+        "features": ["validation", "smart_analysis", "professional_pdf"]
     })
 
 # Error handlers
@@ -516,10 +694,11 @@ def handle_internal_error(e):
     return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    print("🚀 Starting Sovereign Backend...")
-    print("📡 Server: http://localhost:5000")
+    print("🚀 Starting Sovereign Backend - Enhanced Version...")
+    print("🔡 Server: http://localhost:5000")
+    print("✅ Industry validation enabled")
+    print("✅ Smart compliance analysis ready")
+    print("✅ Professional PDF generation ready")
     print("✅ CORS enabled")
-    print("✅ File upload ready")
-    print("✅ Analysis engine ready")
     
     app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
