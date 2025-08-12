@@ -1,5 +1,5 @@
-# Sovereign AI Compliance Backend - CORS Issues Fixed
-# Enhanced with all original features plus better error handling
+# Sovereign AI Compliance Backend - Complete Updated Version for Netlify
+# Enhanced with all original features plus updated CORS for https://sovereignai.netlify.app
 
 import os
 import json
@@ -25,12 +25,18 @@ from reportlab.lib import colors
 # Initialize Flask app
 app = Flask(__name__)
 
-# FIXED CORS CONFIGURATION - This should resolve the multiple headers issue
+# UPDATED CORS CONFIGURATION for Netlify deployment
 CORS(app, 
-     origins=["*"],  # Allow all origins for now
+     origins=[
+         "https://sovereignai.netlify.app",  # Your new Netlify domain
+         "http://localhost:3000",           # Local development React
+         "http://localhost:8080",           # Alternative local port
+         "http://127.0.0.1:5500",          # Live Server
+         "https://*.netlify.app"            # Any Netlify subdomain
+     ],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
-     supports_credentials=False)  # Changed to False to avoid conflicts
+     supports_credentials=False)
 
 # Configuration
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB max file size
@@ -49,16 +55,22 @@ logger = logging.getLogger(__name__)
 analysis_storage = {}
 document_storage = {}
 
-# FIXED: Remove duplicate CORS headers by using a single after_request handler
+# Updated after_request handler for specific origin control
 @app.after_request
 def after_request(response):
-    # Only set headers if not already set to avoid duplicates
-    if 'Access-Control-Allow-Origin' not in response.headers:
-        response.headers['Access-Control-Allow-Origin'] = '*'
-    if 'Access-Control-Allow-Headers' not in response.headers:
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,Accept,Origin,X-Requested-With'
-    if 'Access-Control-Allow-Methods' not in response.headers:
-        response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
+    origin = request.headers.get('Origin')
+    allowed_origins = [
+        'https://sovereignai.netlify.app',
+        'http://localhost:3000',
+        'http://localhost:8080', 
+        'http://127.0.0.1:5500'
+    ]
+    
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,Accept,Origin,X-Requested-With'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
     return response
 
 class PremiumComplianceAnalyzer:
@@ -464,12 +476,18 @@ analyzer = PremiumComplianceAnalyzer()
 def home():
     """Enhanced health check endpoint"""
     return jsonify({
-        "service": "Sovereign AI Compliance Backend - Premium Professional Edition",
+        "service": "Sovereign AI Compliance Backend - Netlify Production Edition",
         "status": "running",
-        "version": "6.0",
+        "version": "6.1",
         "platform": "Railway",
         "cors_enabled": True,
-        "cors_fixed": True,
+        "cors_netlify": True,
+        "allowed_origins": [
+            "https://sovereignai.netlify.app",
+            "http://localhost:3000",
+            "http://localhost:8080",
+            "http://127.0.0.1:5500"
+        ],
         "features": {
             "premium_analysis": "Enhanced risk assessment with competitive benchmarking",
             "real_time_risk": "Dynamic risk calculation",
@@ -769,13 +787,18 @@ def handle_file_too_large(error):
     return jsonify({"success": False, "error": "File too large. Maximum size is 20MB."}), 413
 
 if __name__ == '__main__':
-    logger.info("🚀 Starting Sovereign AI Compliance Backend - Premium Edition v6.0")
+    logger.info("🚀 Starting Sovereign AI Compliance Backend - Netlify Production Edition v6.1")
     logger.info("✨ Features: Enhanced risk assessment, real-time enforcement data")
     logger.info("📊 AI Categories: Hiring, Medical, Finance, Content Moderation")
     logger.info("🌍 Regions: USA, EU, Canada, Global")
-    logger.info("🔧 CORS: Fixed - No duplicate headers")
+    logger.info("🔧 CORS: Updated for Netlify - https://sovereignai.netlify.app")
     logger.info("📄 File Support: PDF, Word, Excel, Text files up to 20MB")
     logger.info("📄 PDF Export: Available for detailed reports")
+    logger.info("🌐 Allowed Origins:")
+    logger.info("   - https://sovereignai.netlify.app (Production)")
+    logger.info("   - http://localhost:3000 (Development)")
+    logger.info("   - http://localhost:8080 (Alternative)")
+    logger.info("   - http://127.0.0.1:5500 (Live Server)")
     
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
