@@ -409,18 +409,23 @@ class ComplianceAnalyzer:
             ["Generated:", datetime.now().strftime("%B %d, %Y at %I:%M %p")],
             ["AI System Type:", analysis['ai_type']],
             ["Operating Regions:", ", ".join(analysis.get('regions', ['EU']))],
+            ["Policy Word Count:", f"{analysis.get('policy_analysis', {}).get('word_count', 'N/A')} words analyzed"],
             ["Risk Score:", f"{analysis['risk_score']}/100 ({analysis['risk_level']})"],
             ["Compliance Score:", f"{analysis['compliance_score']}/100"],
-            ["Critical Issues:", str(len([v for v in analysis['violations'] if v['severity'] == 'CRITICAL']))],
-            ["Total Violations:", str(len(analysis['violations']))]
+            ["Critical Violations:", str(len([v for v in analysis['violations'] if v['severity'] == 'CRITICAL']))],
+            ["Total Violations:", str(len(analysis['violations']))],
+            ["Max Penalty Exposure:", analysis.get('max_penalty', 'Varies by violation')]
         ]
         
-        summary_table = Table(summary_data, colWidths=[4*cm, 8*cm])
+        summary_table = Table(summary_data, colWidths=[4*cm, 10*cm])
         summary_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f8fafc')),
-            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#1e40af')),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8fafc')),
+            ('TEXTCOLOR', (0, 1), (0, -1), colors.HexColor('#1e40af')),
+            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 1), (1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -431,6 +436,38 @@ class ComplianceAnalyzer:
         ]))
         
         story.append(summary_table)
+        story.append(Spacer(1, 30))
+        
+        # Key Findings Section
+        story.append(Paragraph("🎯 Key Findings & Analysis Scope", subtitle_style))
+        
+        key_findings_text = f"""
+        <b>Analysis Overview:</b><br/>
+        This comprehensive compliance assessment analyzed your {analysis.get('ai_type', 'AI system')} against 
+        {len(analysis.get('regions', ['EU']))} regional compliance framework(s): {', '.join([r.upper() for r in analysis.get('regions', ['EU'])])}.
+        <br/><br/>
+        
+        <b>Policy-AI Cross-Reference:</b><br/>
+        We examined {analysis.get('policy_analysis', {}).get('word_count', 'N/A')} words of privacy policy content 
+        and cross-referenced against your AI system's actual capabilities to identify disclosure gaps and compliance violations.
+        <br/><br/>
+        
+        <b>Risk Assessment:</b><br/>
+        Your AI system scored {analysis['risk_score']}/100 on our risk assessment scale, indicating {analysis['risk_level'].lower()}. 
+        This score considers automated decision-making capabilities, data processing practices, policy completeness, and regional regulatory requirements.
+        <br/><br/>
+        
+        <b>Critical Issues Identified:</b><br/>
+        {len([v for v in analysis['violations'] if v['severity'] == 'CRITICAL'])} critical compliance violations require immediate attention 
+        to prevent regulatory penalties up to {analysis.get('max_penalty', '€20M or 4% global revenue')}.
+        <br/><br/>
+        
+        <b>Implementation Timeline:</b><br/>
+        Following our recommendations, full compliance can be achieved within 6-8 weeks through systematic policy updates, 
+        technical safeguards, and governance improvements detailed in this report.
+        """
+        
+        story.append(Paragraph(key_findings_text, body_style))
         story.append(Spacer(1, 30))
         
         # Risk Assessment
